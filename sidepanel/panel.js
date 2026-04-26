@@ -39,23 +39,16 @@ function escHtml(str) {
 
 function cleanTitle(t) {
   if (!t) return '';
-  // 调试日志：发现非字母/数字开头时打印码点（F12 查看、修完后删）
-  if (/^[^\p{L}\p{N}]/u.test(t)) {
-    console.log('[cleanTitle] junk prefix codepoints:',
-      [...t].slice(0, 8).map(c => 'U+' + c.charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()),
-      'raw:', JSON.stringify(t.slice(0, 12))
-    );
-  }
-  // 自适应：剩离开头所有「非有意义字符」直到遇到首个语义字符
-  // 有意义 = 字母 / 数字 / 中文 / 常见合法首字符 +@#*&%([{$!?.
-  const meaningful = /[\p{L}\p{N}+@#*&%(\[{$!?.]/u;
+  // 自适应：剥离开头所有「非有意义字符」直到首个语义字符
+  // 有意义 = 字母 / 数字 / 中文 / 常见合法首字符 +@#*&%([{$!?.【
+  const meaningful = /[\p{L}\p{N}+@#*&%(\[{$!?.\u3010\u300a\u300c\u300e]/u;
   const arr = [...t];
   let i = 0;
   while (i < arr.length && !meaningful.test(arr[i])) i++;
   return arr.slice(i).join('').trim();
 }
 
-const FALLBACK_FAVICON = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="%23ddd"/></svg>';
+const FALLBACK_FAVICON = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#bbb"/><circle cx="8" cy="8" r="3" fill="#fff"/></svg>');
 
 function getFaviconUrl(urlOrTab) {
   if (typeof urlOrTab === 'object' && urlOrTab.favIconUrl) return urlOrTab.favIconUrl;
@@ -115,13 +108,15 @@ function renderActiveTabs(tabs) {
       li.classList.add('filtered');
     }
     li.innerHTML = `
-      <img class="tab-favicon" src="${getFaviconUrl(tab)}" onerror="this.src='${FALLBACK_FAVICON}'">
+      <img class="tab-favicon" src="${getFaviconUrl(tab)}">
       <span class="tab-title" title="${escHtml(tab.url)}">${escHtml(title)}</span>
       <span class="tab-actions">
         <button class="btn-bookmark" title="保存到分组">保存</button>
         <button class="btn-close" title="关闭标签">✕</button>
       </span>`;
 
+    const favImg = li.querySelector('.tab-favicon');
+    favImg.addEventListener('error', () => { favImg.src = FALLBACK_FAVICON; }, { once: true });
     li.querySelector('.tab-title').addEventListener('click', () => chrome.tabs.update(tab.id, { active: true }));
     li.querySelector('.btn-bookmark').addEventListener('click', (e) => { e.stopPropagation(); showGroupPicker(e, 'bookmark', tab); });
     li.querySelector('.btn-close').addEventListener('click', (e) => { e.stopPropagation(); chrome.tabs.remove(tab.id); });
@@ -166,7 +161,7 @@ function renderGroups() {
       const hidden = keyword && !t.title.toLowerCase().includes(keyword) && !t.url.toLowerCase().includes(keyword);
       return `
         <div class="saved-tab${isOpen ? ' tab-open' : ''}${hidden ? ' filtered' : ''}" data-tab-id="${t.id}" data-url="${escHtml(t.url)}">
-          <img class="tab-favicon" src="${escHtml(t.favicon || getFaviconUrl(t.url))}" onerror="this.src='${FALLBACK_FAVICON}'">
+          <img class="tab-favicon" src="${escHtml(t.favicon || getFaviconUrl(t.url))}">
           <span class="tab-title" title="${escHtml(t.url)}">${escHtml(t.title)}</span>
           ${isOpen ? '<span class="open-badge" title="当前已打开">●</span>' : ''}
           <button class="remove-btn" title="从分组移除">✕</button>
@@ -221,6 +216,8 @@ function renderGroups() {
     div.querySelector('.btn-delete-group').addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(group.id); });
 
     div.querySelectorAll('.saved-tab').forEach(el => {
+      const img = el.querySelector('.tab-favicon');
+      if (img) img.addEventListener('error', () => { img.src = FALLBACK_FAVICON; }, { once: true });
       el.querySelector('.tab-title').addEventListener('click', () => smartOpen(el.dataset.url));
       el.querySelector('.remove-btn').addEventListener('click', (e) => { e.stopPropagation(); removeSavedTab(group.id, el.dataset.tabId); });
     });
