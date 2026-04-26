@@ -207,8 +207,9 @@ body {
 
 .tab-actions {
   display: none;
-  gap: 2px;
+  gap: 4px;
   flex-shrink: 0;
+  align-items: center;
 }
 .tab-item:hover .tab-actions { display: flex; }
 
@@ -216,13 +217,34 @@ body {
   border: none;
   background: none;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-size: 12px;
-  color: var(--text-muted);
-  transition: background 0.1s;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
 }
-.tab-actions button:hover { background: var(--btn-bg-hover); color: var(--text); }
+
+/* 保存按钮：文字 */
+.tab-actions .btn-bookmark {
+  padding: 2px 8px;
+  background: var(--btn-bg);
+  color: var(--text-muted);
+}
+.tab-actions .btn-bookmark:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 关闭按钮：图标 */
+.tab-actions .btn-close {
+  padding: 2px 5px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.tab-actions .btn-close:hover {
+  background: #f8d7da;
+  color: #721c24;
+}
 
 /* ---- Group Item ---- */
 .group-item { border-bottom: 1px solid var(--border-subtle); }
@@ -297,33 +319,6 @@ body {
 .group-tabs { padding-left: 4px; }
 .group-tabs.collapsed { display: none; }
 
-/* ---- Hibernated Tab ---- */
-.hibernated-tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.hibernated-tab:hover { background: var(--bg-hover); }
-.hibernated-tab .tab-title { color: var(--text-muted); }
-.hibernated-tab:hover .tab-title { color: var(--text); }
-
-.hibernated-tab .remove-btn {
-  display: none;
-  border: none;
-  background: none;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-size: 12px;
-  color: var(--text-dim);
-  flex-shrink: 0;
-  transition: background 0.1s;
-}
-.hibernated-tab:hover .remove-btn { display: block; }
-.hibernated-tab .remove-btn:hover { background: var(--btn-bg-hover); color: var(--text); }
 
 /* ---- Group Picker ---- */
 #group-picker {
@@ -332,11 +327,27 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-  min-width: 160px;
+  min-width: 180px;
   z-index: 1000;
   overflow: hidden;
 }
 #group-picker.hidden { display: none; }
+
+/* 顶部「保存后关闭标签」开关 */
+.picker-mode-row {
+  padding: 7px 12px 5px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.picker-mode-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.picker-mode-label input[type=checkbox] { cursor: pointer; accent-color: var(--accent); }
 
 #group-picker-list .picker-item {
   display: flex;
@@ -378,5 +389,57 @@ body {
   text-align: center;
 }
 
+/* ---- Drag & Drop ---- */
+.tab-item.dragging { opacity: 0.4; }
+
+.group-item.drag-over .group-header,
+.group-item.drag-over .group-tabs {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.group-item.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* ---- Saved tab (bookmark style) ---- */
+.saved-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  color: var(--text-muted);
+}
+.saved-tab:hover { background: var(--bg-hover); color: var(--text); }
+.saved-tab .tab-title { color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+/* 已打开的记录高亮 */
+.saved-tab.tab-open { color: var(--text); }
+.saved-tab.tab-open .tab-title { font-weight: 500; }
+
+.open-badge {
+  font-size: 8px;
+  color: var(--accent);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.saved-tab .remove-btn {
+  display: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: background 0.1s;
+}
+.saved-tab:hover .remove-btn { display: block; }
+.saved-tab .remove-btn:hover { background: var(--btn-bg-hover); color: var(--text); }
+
 /* ---- Hidden items (search filter) ---- */
-.tab-item.filtered, .hibernated-tab.filtered { display: none; }
+.tab-item.filtered, .saved-tab.filtered { display: none; }

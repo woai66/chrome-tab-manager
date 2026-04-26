@@ -3,7 +3,16 @@ let state = { groups: [] };
 
 async function loadData() {
   const result = await chrome.storage.local.get('groups');
-  state.groups = result.groups || [];
+  const groups = result.groups || [];
+  // 迁移旧数据：hibernatedTabs -> savedTabs
+  groups.forEach(g => {
+    if (g.hibernatedTabs && !g.savedTabs) {
+      g.savedTabs = g.hibernatedTabs.map(t => ({ ...t, source: 'hibernate' }));
+      delete g.hibernatedTabs;
+    }
+    g.savedTabs = g.savedTabs || [];
+  });
+  state.groups = groups;
 }
 
 let saveTimer = null;
@@ -28,11 +37,23 @@ function escHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function cleanTitle(title) {
+  if (!title) return '';
+  // strip: control chars, zero-width, curly/smart quotes, > prefix
+  // Chrome discarded tabs prepend chars like ‘’> or “”>
+  return title
+    .replace(/^[\x00-\x1f\x7f\u200b-\u200f\ufeff\u2028\u2029]+/g, '')
+    .replace(/^[\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f\u2032\u2033]+/g, '')
+    .replace(/^[>\s]+/, '')
+    .trim();
+}
+
 const FALLBACK_FAVICON = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="%23ddd"/></svg>';
 
-function getFaviconUrl(tab) {
-  if (tab.favIconUrl) return tab.favIconUrl;
-  try { return `https://www.google.com/s2/favicons?domain=${new URL(tab.url).hostname}`; }
+function getFaviconUrl(urlOrTab) {
+  if (typeof urlOrTab === 'object' && urlOrTab.favIconUrl) return urlOrTab.favIconUrl;
+  const url = typeof urlOrTab === 'string' ? urlOrTab : urlOrTab.url;
+  try { return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16`; }
   catch { return FALLBACK_FAVICON; }
 }
 
@@ -52,7 +73,7 @@ function filterTabs() {
     const title = (el.querySelector('.tab-title')?.title || '').toLowerCase();
     el.classList.toggle('filtered', !!keyword && !title.includes(keyword));
   });
-  document.querySelectorAll('.hibernated-tab').forEach(el => {
+  document.querySelectorAll('.saved-tab').forEach(el => {
     const title = (el.querySelector('.tab-title')?.title || '').toLowerCase();
     const url = (el.dataset.url || '').toLowerCase();
     el.classList.toggle('filtered', !!keyword && !title.includes(keyword) && !url.includes(keyword));
@@ -60,7 +81,12 @@ function filterTabs() {
 }
 
 // ---- Render ----
+let currentTabUrls = new Set(); // 当前已打开的 tab URL 集合
+
 function renderActiveTabs(tabs) {
+  // 更新当前已打开的 URL 集合（用于分组高亮）
+  currentTabUrls = new Set(tabs.map(t => t.url));
+
   const list = document.getElementById('active-list');
   list.innerHTML = '';
   if (!tabs.length) {
@@ -69,23 +95,48 @@ function renderActiveTabs(tabs) {
   }
   const keyword = getKeyword();
   tabs.forEach(tab => {
+    const title = cleanTitle(tab.title) || tab.url;
     const li = document.createElement('li');
     li.className = 'tab-item' + (tab.active ? ' active-tab' : '');
     li.dataset.tabId = tab.id;
-    if (keyword && !tab.title.toLowerCase().includes(keyword) && !tab.url.toLowerCase().includes(keyword)) {
+    li.draggable = true;
+    li.dataset.url = tab.url;
+    li.dataset.title = title;
+    li.dataset.favicon = getFaviconUrl(tab);
+
+    if (keyword && !title.toLowerCase().includes(keyword) && !tab.url.toLowerCase().includes(keyword)) {
       li.classList.add('filtered');
     }
     li.innerHTML = `
       <img class="tab-favicon" src="${getFaviconUrl(tab)}" onerror="this.src='${FALLBACK_FAVICON}'">
-      <span class="tab-title" title="${escHtml(tab.title)}">${escHtml(tab.title)}</span>
+      <span class="tab-title" title="${escHtml(tab.url)}">${escHtml(title)}</span>
       <span class="tab-actions">
-        <button class="btn-hibernate" title="休眠到分组">💤</button>
+        <button class="btn-bookmark" title="保存到分组">保存</button>
         <button class="btn-close" title="关闭标签">✕</button>
       </span>`;
+
     li.querySelector('.tab-title').addEventListener('click', () => chrome.tabs.update(tab.id, { active: true }));
-    li.querySelector('.btn-hibernate').addEventListener('click', (e) => { e.stopPropagation(); showGroupPicker(e, 'single', tab); });
+    li.querySelector('.btn-bookmark').addEventListener('click', (e) => { e.stopPropagation(); showGroupPicker(e, 'bookmark', tab); });
     li.querySelector('.btn-close').addEventListener('click', (e) => { e.stopPropagation(); chrome.tabs.remove(tab.id); });
+
+    // 拖拽
+    li.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('application/tab', JSON.stringify({
+        url: tab.url,
+        title,
+        favicon: getFaviconUrl(tab)
+      }));
+      li.classList.add('dragging');
+    });
+    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+
     list.appendChild(li);
+  });
+
+  // 同步刷新分组高亮
+  document.querySelectorAll('.saved-tab').forEach(el => {
+    el.classList.toggle('tab-open', currentTabUrls.has(el.dataset.url));
   });
 }
 
@@ -97,36 +148,60 @@ function renderGroups() {
     return;
   }
   const keyword = getKeyword();
+
   state.groups.forEach(group => {
     const div = document.createElement('div');
     div.className = 'group-item';
     div.dataset.groupId = group.id;
 
-    const tabsHtml = group.hibernatedTabs.map(t => {
+    const tabsHtml = group.savedTabs.map(t => {
+      const isOpen = currentTabUrls.has(t.url);
       const hidden = keyword && !t.title.toLowerCase().includes(keyword) && !t.url.toLowerCase().includes(keyword);
       return `
-        <div class="hibernated-tab${hidden ? ' filtered' : ''}" data-tab-id="${t.id}" data-url="${escHtml(t.url)}">
-          <img class="tab-favicon" src="${escHtml(t.favicon || FALLBACK_FAVICON)}" onerror="this.src='${FALLBACK_FAVICON}'">
-          <span class="tab-title" title="${escHtml(t.title)}">${escHtml(t.title)}</span>
-          <button class="remove-btn" title="移除">✕</button>
+        <div class="saved-tab${isOpen ? ' tab-open' : ''}${hidden ? ' filtered' : ''}" data-tab-id="${t.id}" data-url="${escHtml(t.url)}">
+          <img class="tab-favicon" src="${escHtml(t.favicon || getFaviconUrl(t.url))}" onerror="this.src='${FALLBACK_FAVICON}'">
+          <span class="tab-title" title="${escHtml(t.url)}">${escHtml(t.title)}</span>
+          ${isOpen ? '<span class="open-badge" title="当前已打开">●</span>' : ''}
+          <button class="remove-btn" title="从分组移除">✕</button>
         </div>`;
     }).join('');
 
     div.innerHTML = `
-      <div class="group-header">
-        <div class="group-color-bar" style="background:${group.color}"></div>
+      <div class="group-header" style="border-left: 3px solid ${group.color}">
         <span class="group-name">${escHtml(group.name)}</span>
-        <span class="group-count">${group.hibernatedTabs.length}</span>
+        <span class="group-count">${group.savedTabs.length}</span>
         <span class="group-actions">
-          <button class="btn-restore-all" title="全部恢复">▶▶</button>
+          <button class="btn-open-all" title="全部打开">▶▶</button>
           <button class="btn-rename" title="重命名">✏️</button>
           <button class="btn-delete-group" title="删除分组">🗑</button>
         </span>
         <span class="group-toggle">${group.collapsed ? '▶' : '▼'}</span>
       </div>
       <div class="group-tabs${group.collapsed ? ' collapsed' : ''}">
-        ${tabsHtml || '<div class="empty-hint">暂无休眠标签</div>'}
+        ${tabsHtml || '<div class="empty-hint">拖拽标签到此处，或用 🔖 保存</div>'}
       </div>`;
+
+    // 拖拽放入
+    const groupTabs = div.querySelector('.group-tabs');
+    const groupHeader = div.querySelector('.group-header');
+    [groupHeader, groupTabs].forEach(target => {
+      target.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        div.classList.add('drag-over');
+      });
+      target.addEventListener('dragleave', (e) => {
+        if (!div.contains(e.relatedTarget)) div.classList.remove('drag-over');
+      });
+      target.addEventListener('drop', (e) => {
+        e.preventDefault();
+        div.classList.remove('drag-over');
+        try {
+          const data = JSON.parse(e.dataTransfer.getData('application/tab'));
+          addTabToGroup(group.id, data.url, data.title, data.favicon);
+        } catch {}
+      });
+    });
 
     div.querySelector('.group-header').addEventListener('click', (e) => {
       if (e.target.closest('.group-actions')) return;
@@ -134,13 +209,15 @@ function renderGroups() {
       saveData();
       renderGroups();
     });
-    div.querySelector('.btn-restore-all').addEventListener('click', (e) => { e.stopPropagation(); restoreAllTabs(group.id); });
+    div.querySelector('.btn-open-all').addEventListener('click', (e) => { e.stopPropagation(); openAllTabs(group.id); });
     div.querySelector('.btn-rename').addEventListener('click', (e) => { e.stopPropagation(); startRename(div, group); });
     div.querySelector('.btn-delete-group').addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(group.id); });
-    div.querySelectorAll('.hibernated-tab').forEach(el => {
-      el.querySelector('.tab-title').addEventListener('click', () => restoreTab(group.id, el.dataset.tabId));
-      el.querySelector('.remove-btn').addEventListener('click', (e) => { e.stopPropagation(); removeHibernated(group.id, el.dataset.tabId); });
+
+    div.querySelectorAll('.saved-tab').forEach(el => {
+      el.querySelector('.tab-title').addEventListener('click', () => smartOpen(el.dataset.url));
+      el.querySelector('.remove-btn').addEventListener('click', (e) => { e.stopPropagation(); removeSavedTab(group.id, el.dataset.tabId); });
     });
+
     container.appendChild(div);
   });
 }
@@ -151,6 +228,17 @@ async function renderAll() {
   renderGroups();
 }
 
+// ---- Smart Open ----
+async function smartOpen(url) {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const existing = tabs.find(t => t.url === url);
+  if (existing) {
+    chrome.tabs.update(existing.id, { active: true });
+  } else {
+    chrome.tabs.create({ url });
+  }
+}
+
 // ---- Group Operations ----
 function createGroup(name) {
   const group = {
@@ -158,7 +246,7 @@ function createGroup(name) {
     name,
     color: COLORS[state.groups.length % COLORS.length],
     collapsed: false,
-    hibernatedTabs: []
+    savedTabs: []
   };
   state.groups.push(group);
   saveData();
@@ -167,7 +255,7 @@ function createGroup(name) {
 }
 
 function deleteGroup(groupId) {
-  if (!confirm('删除此分组及其所有休眠标签？')) return;
+  if (!confirm('删除此分组及其所有保存的标签？')) return;
   state.groups = state.groups.filter(g => g.id !== groupId);
   saveData();
   renderGroups();
@@ -195,18 +283,74 @@ function startRename(div, group) {
 }
 
 // ---- Tab Operations ----
-async function hibernateTab(tab, groupId) {
+function addTabToGroup(groupId, url, title, favicon) {
   const group = state.groups.find(g => g.id === groupId);
   if (!group) return;
-  group.hibernatedTabs.push({
+  // 去重
+  if (group.savedTabs.some(t => t.url === url)) return;
+  group.savedTabs.push({
     id: newTabId(),
-    title: tab.title || tab.url,
-    url: tab.url,
-    favicon: tab.favIconUrl || '',
-    savedAt: Date.now()
+    title: cleanTitle(title) || url,
+    url,
+    favicon: favicon || '',
+    savedAt: Date.now(),
+    source: 'bookmark'
   });
   saveData();
+  renderGroups();
+}
+
+async function hibernateTabToGroup(tab, groupId) {
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group) return;
+  if (!group.savedTabs.some(t => t.url === tab.url)) {
+    group.savedTabs.push({
+      id: newTabId(),
+      title: cleanTitle(tab.title) || tab.url,
+      url: tab.url,
+      favicon: tab.favIconUrl || '',
+      savedAt: Date.now(),
+      source: 'hibernate'
+    });
+  }
+  saveData();
   await chrome.tabs.remove(tab.id);
+  renderGroups();
+}
+
+async function openAllTabs(groupId) {
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group || !group.savedTabs.length) return;
+  for (const tab of group.savedTabs) {
+    await smartOpen(tab.url);
+  }
+}
+
+function removeSavedTab(groupId, tabId) {
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group) return;
+  group.savedTabs = group.savedTabs.filter(t => t.id !== tabId);
+  saveData();
+  renderGroups();
+}
+
+async function bookmarkAllTabs(groupId) {
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group) return;
+  const tabs = await chrome.tabs.query({ pinned: false, currentWindow: true });
+  tabs.forEach(tab => {
+    if (!group.savedTabs.some(t => t.url === tab.url)) {
+      group.savedTabs.push({
+        id: newTabId(),
+        title: cleanTitle(tab.title) || tab.url,
+        url: tab.url,
+        favicon: tab.favIconUrl || '',
+        savedAt: Date.now(),
+        source: 'bookmark'
+      });
+    }
+  });
+  saveData();
   renderGroups();
 }
 
@@ -216,52 +360,25 @@ async function hibernateAllTabs(groupId) {
   const tabs = await chrome.tabs.query({ pinned: false, currentWindow: true });
   if (!tabs.length) return;
   tabs.forEach(tab => {
-    group.hibernatedTabs.push({
-      id: newTabId(),
-      title: tab.title || tab.url,
-      url: tab.url,
-      favicon: tab.favIconUrl || '',
-      savedAt: Date.now()
-    });
+    if (!group.savedTabs.some(t => t.url === tab.url)) {
+      group.savedTabs.push({
+        id: newTabId(),
+        title: cleanTitle(tab.title) || tab.url,
+        url: tab.url,
+        favicon: tab.favIconUrl || '',
+        savedAt: Date.now(),
+        source: 'hibernate'
+      });
+    }
   });
   saveData();
   await chrome.tabs.remove(tabs.map(t => t.id));
   await renderAll();
 }
 
-async function restoreTab(groupId, tabId) {
-  const group = state.groups.find(g => g.id === groupId);
-  if (!group) return;
-  const tab = group.hibernatedTabs.find(t => t.id === tabId);
-  if (!tab) return;
-  await chrome.tabs.create({ url: tab.url });
-  group.hibernatedTabs = group.hibernatedTabs.filter(t => t.id !== tabId);
-  saveData();
-  renderGroups();
-}
-
-async function restoreAllTabs(groupId) {
-  const group = state.groups.find(g => g.id === groupId);
-  if (!group || !group.hibernatedTabs.length) return;
-  for (const tab of group.hibernatedTabs) {
-    await chrome.tabs.create({ url: tab.url });
-  }
-  group.hibernatedTabs = [];
-  saveData();
-  renderGroups();
-}
-
-function removeHibernated(groupId, tabId) {
-  const group = state.groups.find(g => g.id === groupId);
-  if (!group) return;
-  group.hibernatedTabs = group.hibernatedTabs.filter(t => t.id !== tabId);
-  saveData();
-  renderGroups();
-}
-
 // ---- Group Picker ----
-// mode: 'single' (休眠单个标签) | 'all' (批量休眠)
-let pickerMode = 'single';
+// mode: 'bookmark' | 'hibernate' | 'hibernate-all' | 'bookmark-all'
+let pickerMode = 'bookmark';
 let pickerTab = null;
 
 function showGroupPicker(e, mode, tab = null) {
@@ -270,22 +387,32 @@ function showGroupPicker(e, mode, tab = null) {
 
   const picker = document.getElementById('group-picker');
   const list = document.getElementById('group-picker-list');
-  list.innerHTML = state.groups.length
+  const closeAfter = (mode === 'bookmark');
+  list.innerHTML = `<div class="picker-mode-row">
+    <label class="picker-mode-label">
+      <input type="checkbox" id="picker-close-cb"${closeAfter ? '' : ' checked'}> 保存后关闭标签
+    </label>
+  </div>` + (state.groups.length
     ? state.groups.map(g => `
         <div class="picker-item" data-group-id="${g.id}">
           <span class="picker-dot" style="background:${g.color}"></span>
           ${escHtml(g.name)}
         </div>`).join('')
-    : '<div class="empty-hint">暂无分组</div>';
+    : '<div class="empty-hint">暂无分组</div>');
 
   list.querySelectorAll('.picker-item').forEach(el => {
     el.addEventListener('click', () => {
       const gid = el.dataset.groupId;
       const mode = pickerMode;
       const tab = pickerTab;
+      const closeTab = document.getElementById('picker-close-cb')?.checked;
       hidePicker();
-      if (mode === 'all') hibernateAllTabs(gid);
-      else if (tab) hibernateTab(tab, gid);
+      if (mode === 'hibernate-all') hibernateAllTabs(gid);
+      else if (mode === 'bookmark-all') bookmarkAllTabs(gid);
+      else if (tab) {
+        if (closeTab) hibernateTabToGroup(tab, gid);
+        else addTabToGroup(gid, tab.url, tab.title, tab.favIconUrl);
+      }
     });
   });
 
@@ -299,7 +426,6 @@ function hidePicker() {
 }
 
 // ---- New Group Form ----
-// pendingHibernate: 新建分组后需要触发的休眠操作
 let pendingHibernate = null;
 
 function showNewGroupForm(onCreated = null) {
@@ -327,7 +453,6 @@ function confirmNewGroup() {
 
 // ---- Event Listeners ----
 document.getElementById('btn-new-group').addEventListener('click', () => showNewGroupForm());
-
 document.getElementById('btn-group-confirm').addEventListener('click', confirmNewGroup);
 document.getElementById('btn-group-cancel').addEventListener('click', hideNewGroupForm);
 document.getElementById('new-group-input').addEventListener('keydown', (e) => {
@@ -347,12 +472,17 @@ document.getElementById('btn-search-toggle').addEventListener('click', () => {
 });
 document.getElementById('search-input').addEventListener('input', filterTabs);
 
+// 全部保存 / 全部休眠（toolbar 按钮）
 document.getElementById('btn-hibernate-all').addEventListener('click', (e) => {
+  const mode = e.shiftKey ? 'hibernate-all' : 'bookmark-all';
   if (!state.groups.length) {
-    showNewGroupForm((gid) => hibernateAllTabs(gid));
+    showNewGroupForm((gid) => {
+      if (mode === 'hibernate-all') hibernateAllTabs(gid);
+      else bookmarkAllTabs(gid);
+    });
     return;
   }
-  showGroupPicker(e, 'all');
+  showGroupPicker(e, mode);
 });
 
 document.getElementById('btn-picker-new').addEventListener('click', () => {
@@ -360,8 +490,10 @@ document.getElementById('btn-picker-new').addEventListener('click', () => {
   const savedTab = pickerTab;
   hidePicker();
   showNewGroupForm((gid) => {
-    if (savedMode === 'all') hibernateAllTabs(gid);
-    else if (savedTab) hibernateTab(savedTab, gid);
+    if (savedMode === 'hibernate-all') hibernateAllTabs(gid);
+    else if (savedMode === 'bookmark-all') bookmarkAllTabs(gid);
+    else if (savedMode === 'hibernate' && savedTab) hibernateTabToGroup(savedTab, gid);
+    else if (savedMode === 'bookmark' && savedTab) addTabToGroup(gid, savedTab.url, savedTab.title, savedTab.favIconUrl);
   });
 });
 
