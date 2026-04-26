@@ -39,13 +39,16 @@ function escHtml(str) {
 
 function cleanTitle(title) {
   if (!title) return '';
-  // strip: control chars, zero-width, curly/smart quotes, > prefix
-  // Chrome discarded tabs prepend chars like ‘’> or “”>
-  return title
-    .replace(/^[\x00-\x1f\x7f\u200b-\u200f\ufeff\u2028\u2029]+/g, '')
-    .replace(/^[\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f\u2032\u2033]+/g, '')
-    .replace(/^[>\s]+/, '')
-    .trim();
+  // Chrome discarded/unloaded tabs prepend junk: control chars, smart quotes, >
+  let s = title;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^[\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\ufeff]+/, '');
+    s = s.replace(/^[\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f\u2032\u2033\u0027\u0022]+/, '');
+    s = s.replace(/^[>\s]+/, '');
+  } while (s !== prev);
+  return s;
 }
 
 const FALLBACK_FAVICON = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="%23ddd"/></svg>';
