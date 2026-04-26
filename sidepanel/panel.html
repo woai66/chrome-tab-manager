@@ -18,8 +18,18 @@
           </svg>
         </button>
         <button id="btn-new-group" title="新建分组">+</button>
+        <button id="btn-settings" title="设置">⚙</button>
       </div>
     </header>
+
+    <div id="settings-panel" class="hidden">
+      <label class="settings-row">
+        <input type="checkbox" id="toggle-sync">
+        <span>跨设备同步</span>
+      </label>
+      <div id="sync-quota" class="settings-hint">已用 -- / 100 KB</div>
+      <div class="settings-hint">仅同步分组和标签 URL，不同步图标</div>
+    </div>
 
     <div id="search-bar" class="hidden">
       <input id="search-input" type="text" placeholder="搜索标签标题或网址…" autocomplete="off">

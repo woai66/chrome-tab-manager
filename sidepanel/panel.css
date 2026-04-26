@@ -66,7 +66,7 @@ body {
 
 .toolbar-actions { display: flex; align-items: center; gap: 4px; }
 
-#btn-search-toggle, #btn-new-group {
+#btn-search-toggle, #btn-new-group, #btn-settings {
   border: none;
   border-radius: 4px;
   background: var(--btn-bg);
@@ -79,7 +79,37 @@ body {
 }
 #btn-search-toggle { width: 26px; height: 26px; }
 #btn-new-group { width: 26px; height: 26px; font-size: 18px; line-height: 1; }
-#btn-search-toggle:hover, #btn-new-group:hover { background: var(--btn-bg-hover); }
+#btn-settings { width: 26px; height: 26px; font-size: 13px; }
+#btn-search-toggle:hover, #btn-new-group:hover, #btn-settings:hover { background: var(--btn-bg-hover); }
+
+#settings-panel {
+  position: absolute;
+  top: 44px;
+  right: 8px;
+  z-index: 1200;
+  min-width: 210px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+}
+#settings-panel.hidden { display: none; }
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.settings-row input { accent-color: var(--accent); }
+.settings-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
 
 /* ---- Search Bar ---- */
 #search-bar {

@@ -1,25 +1,34 @@
 // ---- Storage ----
-let state = { groups: [] };
+let state = { groups: [], syncEnabled: false };
 
-async function loadData() {
-  const result = await chrome.storage.local.get('groups');
-  const groups = result.groups || [];
-  // 迁移旧数据：hibernatedTabs -> savedTabs
+function normalizeGroups(groups) {
   groups.forEach(g => {
     if (g.hibernatedTabs && !g.savedTabs) {
       g.savedTabs = g.hibernatedTabs.map(t => ({ ...t, source: 'hibernate' }));
       delete g.hibernatedTabs;
     }
     g.savedTabs = g.savedTabs || [];
+    g.updatedAt = g.updatedAt || Date.now();
+    g.savedTabs.forEach(t => { t.updatedAt = t.updatedAt || t.savedAt || Date.now(); });
   });
-  state.groups = groups;
+  return groups;
+}
+
+async function loadData() {
+  const result = await chrome.storage.local.get(['groups', 'syncEnabled']);
+  state.groups = normalizeGroups(result.groups || []);
+  state.syncEnabled = !!result.syncEnabled;
+  if (state.syncEnabled) {
+    await syncPull();
+  }
 }
 
 let saveTimer = null;
 function saveData() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    chrome.storage.local.set({ groups: state.groups });
+  saveTimer = setTimeout(async () => {
+    await chrome.storage.local.set({ groups: state.groups });
+    scheduleSyncPush();
   }, 300);
 }
 
@@ -71,6 +80,135 @@ function hexToRgba(hex, alpha) {
 
 // 当前正在拖拽的分组索引（拖整个分组重排时）
 let draggingGroupIdx = null;
+
+
+// ---- Cloud Sync ----
+let syncPushTimer = null;
+let lastSyncPushAt = 0;
+
+function getCloudFavicon(url) {
+  try {
+    return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16`;
+  } catch { return ''; }
+}
+
+function markGroupUpdated(group) {
+  if (group) group.updatedAt = Date.now();
+}
+
+async function syncPush() {
+  if (!state.syncEnabled) return;
+  const now = Date.now();
+  const items = {
+    sync_meta: {
+      v: 1,
+      lastWriteAt: now,
+      groupOrder: state.groups.map(g => g.id)
+    }
+  };
+
+  state.groups.forEach(g => {
+    items[`group_${g.id}`] = {
+      name: g.name,
+      color: g.color,
+      collapsed: g.collapsed,
+      tabIds: g.savedTabs.map(t => t.id),
+      updatedAt: g.updatedAt || now
+    };
+    g.savedTabs.forEach(t => {
+      items[`tab_${t.id}`] = {
+        gid: g.id,
+        title: t.title,
+        url: t.url,
+        source: t.source,
+        savedAt: t.savedAt,
+        updatedAt: t.updatedAt || t.savedAt || now
+      };
+    });
+  });
+
+  const all = await chrome.storage.sync.get(null);
+  const valid = new Set(Object.keys(items));
+  const stale = Object.keys(all).filter(k =>
+    (k === 'sync_meta' || k.startsWith('group_') || k.startsWith('tab_')) && !valid.has(k)
+  );
+  if (stale.length) await chrome.storage.sync.remove(stale);
+  await chrome.storage.sync.set(items);
+  lastSyncPushAt = Date.now();
+  updateQuotaDisplay();
+}
+
+async function syncPull() {
+  const all = await chrome.storage.sync.get(null);
+  if (!all.sync_meta) return;
+  const localById = new Map(state.groups.map(g => [g.id, g]));
+  const merged = [];
+
+  (all.sync_meta.groupOrder || []).forEach(gid => {
+    const meta = all[`group_${gid}`];
+    if (!meta) return;
+    const local = localById.get(gid);
+    const useRemoteGroup = !local || (meta.updatedAt || 0) >= (local.updatedAt || 0);
+
+    const tabs = (meta.tabIds || []).map(tid => {
+      const remote = all[`tab_${tid}`];
+      const localTab = local?.savedTabs?.find(t => t.id === tid);
+      if (!remote && !localTab) return null;
+      if (!remote) return localTab;
+      if (!localTab) {
+        return {
+          id: tid,
+          title: remote.title,
+          url: remote.url,
+          favicon: getCloudFavicon(remote.url),
+          savedAt: remote.savedAt,
+          source: remote.source,
+          updatedAt: remote.updatedAt || remote.savedAt
+        };
+      }
+      const useRemoteTab = (remote.updatedAt || remote.savedAt || 0) >= (localTab.updatedAt || localTab.savedAt || 0);
+      return useRemoteTab
+        ? { ...localTab, ...remote, id: tid, favicon: localTab.favicon || getCloudFavicon(remote.url) }
+        : localTab;
+    }).filter(Boolean);
+
+    merged.push({
+      id: gid,
+      name: useRemoteGroup ? meta.name : local.name,
+      color: useRemoteGroup ? meta.color : local.color,
+      collapsed: useRemoteGroup ? meta.collapsed : local.collapsed,
+      savedTabs: tabs,
+      updatedAt: Math.max(meta.updatedAt || 0, local?.updatedAt || 0)
+    });
+  });
+
+  // 保留远端没有的本地分组，避免刚开启同步时误删本地数据。
+  state.groups.forEach(g => {
+    if (!merged.some(m => m.id === g.id)) merged.push(g);
+  });
+
+  state.groups = normalizeGroups(merged);
+  await chrome.storage.local.set({ groups: state.groups });
+  renderGroups();
+  updateQuotaDisplay();
+}
+
+function scheduleSyncPush() {
+  if (!state.syncEnabled) return;
+  clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(() => syncPush().catch(err => console.warn('[sync] push failed:', err)), 5000);
+}
+
+async function updateQuotaDisplay() {
+  const el = document.getElementById('sync-quota');
+  if (!el) return;
+  try {
+    const used = await chrome.storage.sync.getBytesInUse(null);
+    el.textContent = `已用 ${(used / 1024).toFixed(1)} / 100 KB`;
+  } catch {
+    el.textContent = '同步配额读取失败';
+  }
+}
 
 // ---- Search ----
 function getKeyword() {
@@ -283,6 +421,7 @@ function renderGroups() {
     groupHeader.addEventListener('click', (e) => {
       if (e.target.closest('.group-actions')) return;
       group.collapsed = !group.collapsed;
+      markGroupUpdated(group);
       saveData();
       renderGroups();
     });
@@ -378,6 +517,7 @@ function reorderGroup(fromIdx, toIdx, before) {
   if (!before) target += 1;
   target = Math.max(0, Math.min(state.groups.length, target));
   state.groups.splice(target, 0, moved);
+  markGroupUpdated(moved);
   saveData();
   renderGroups();
 }
@@ -394,7 +534,9 @@ function reorderSavedTab(groupId, fromTabId, toTabId, before) {
   if (fromIdx < toIdx) target -= 1;
   if (!before) target += 1;
   target = Math.max(0, Math.min(group.savedTabs.length, target));
+  moved.updatedAt = Date.now();
   group.savedTabs.splice(target, 0, moved);
+  markGroupUpdated(group);
   saveData();
   renderGroups();
 }
@@ -409,6 +551,7 @@ function moveSavedTab(fromGroupId, tabId, toGroupId, beforeTabId = null, before 
   const [moved] = fromGroup.savedTabs.splice(fromIdx, 1);
   // URL 去重：目标分组里若已有相同 URL，先移除（避免重复）
   toGroup.savedTabs = toGroup.savedTabs.filter(t => t.url !== moved.url);
+  moved.updatedAt = Date.now();
   if (beforeTabId) {
     const insertAt = toGroup.savedTabs.findIndex(t => t.id === beforeTabId);
     if (insertAt < 0) toGroup.savedTabs.push(moved);
@@ -416,6 +559,8 @@ function moveSavedTab(fromGroupId, tabId, toGroupId, beforeTabId = null, before 
   } else {
     toGroup.savedTabs.push(moved);
   }
+  markGroupUpdated(fromGroup);
+  markGroupUpdated(toGroup);
   saveData();
   renderGroups();
 }
@@ -427,7 +572,8 @@ function createGroup(name) {
     name,
     color: COLORS[state.groups.length % COLORS.length],
     collapsed: false,
-    savedTabs: []
+    savedTabs: [],
+    updatedAt: Date.now()
   };
   state.groups.push(group);
   saveData();
@@ -452,7 +598,10 @@ function startRename(div, group) {
   input.select();
   const finish = () => {
     const val = input.value.trim();
-    if (val) group.name = val;
+    if (val) {
+      group.name = val;
+      markGroupUpdated(group);
+    }
     saveData();
     renderGroups();
   };
@@ -475,8 +624,10 @@ function addTabToGroup(groupId, url, title, favicon) {
     url,
     favicon: favicon || '',
     savedAt: Date.now(),
-    source: 'bookmark'
+    source: 'bookmark',
+    updatedAt: Date.now()
   });
+  markGroupUpdated(group);
   saveData();
   renderGroups();
 }
@@ -491,9 +642,11 @@ async function hibernateTabToGroup(tab, groupId) {
       url: tab.url,
       favicon: tab.favIconUrl || '',
       savedAt: Date.now(),
-      source: 'hibernate'
+      source: 'hibernate',
+      updatedAt: Date.now()
     });
   }
+  markGroupUpdated(group);
   saveData();
   await chrome.tabs.remove(tab.id);
   renderGroups();
@@ -511,6 +664,7 @@ function removeSavedTab(groupId, tabId) {
   const group = state.groups.find(g => g.id === groupId);
   if (!group) return;
   group.savedTabs = group.savedTabs.filter(t => t.id !== tabId);
+  markGroupUpdated(group);
   saveData();
   renderGroups();
 }
@@ -527,10 +681,12 @@ async function bookmarkAllTabs(groupId) {
         url: tab.url,
         favicon: tab.favIconUrl || '',
         savedAt: Date.now(),
-        source: 'bookmark'
+        source: 'bookmark',
+        updatedAt: Date.now()
       });
     }
   });
+  markGroupUpdated(group);
   saveData();
   renderGroups();
 }
@@ -548,10 +704,12 @@ async function hibernateAllTabs(groupId) {
         url: tab.url,
         favicon: tab.favIconUrl || '',
         savedAt: Date.now(),
-        source: 'hibernate'
+        source: 'hibernate',
+        updatedAt: Date.now()
       });
     }
   });
+  markGroupUpdated(group);
   saveData();
   await chrome.tabs.remove(tabs.map(t => t.id));
   await renderAll();
@@ -678,13 +836,64 @@ document.getElementById('btn-picker-new').addEventListener('click', () => {
   });
 });
 
+async function consumePendingContextSave() {
+  const { pendingContextSave } = await chrome.storage.local.get('pendingContextSave');
+  if (!pendingContextSave) return;
+  await chrome.storage.local.remove('pendingContextSave');
+  showNewGroupForm((gid) => addTabToGroup(gid, pendingContextSave.url, pendingContextSave.title, pendingContextSave.favIconUrl));
+}
+
+document.getElementById('btn-settings').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const panel = document.getElementById('settings-panel');
+  panel.classList.toggle('hidden');
+  updateQuotaDisplay();
+});
+
+document.getElementById('toggle-sync').addEventListener('change', async (e) => {
+  state.syncEnabled = e.target.checked;
+  await chrome.storage.local.set({ syncEnabled: state.syncEnabled });
+  if (state.syncEnabled) {
+    await syncPush();
+    await syncPull();
+    await updateQuotaDisplay();
+  } else {
+    await chrome.storage.sync.clear();
+    await updateQuotaDisplay();
+  }
+});
+
 document.addEventListener('click', (e) => {
   if (!e.target.closest('#group-picker')) hidePicker();
   if (!e.target.closest('#new-group-form') && !e.target.closest('#btn-new-group')) hideNewGroupForm();
+  if (!e.target.closest('#settings-panel') && !e.target.closest('#btn-settings')) {
+    document.getElementById('settings-panel').classList.add('hidden');
+  }
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'TABS_CHANGED') getActiveTabs().then(renderActiveTabs);
+  if (msg.type === 'PENDING_SAVE_NEW_GROUP') {
+    chrome.storage.local.remove('pendingContextSave');
+    const tab = msg.tab;
+    showNewGroupForm((gid) => addTabToGroup(gid, tab.url, tab.title, tab.favIconUrl));
+  }
 });
 
-loadData().then(renderAll);
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.groups) {
+    state.groups = normalizeGroups(changes.groups.newValue || []);
+    renderGroups();
+  }
+  if (area === 'sync' && state.syncEnabled) {
+    const recentlyPushed = Date.now() - lastSyncPushAt < 2000;
+    if (!recentlyPushed) syncPull();
+  }
+});
+
+loadData().then(async () => {
+  document.getElementById('toggle-sync').checked = state.syncEnabled;
+  updateQuotaDisplay();
+  await renderAll();
+  consumePendingContextSave();
+});

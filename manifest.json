@@ -3,7 +3,7 @@
   "name": "Tab Manager",
   "version": "1.0.0",
   "description": "Sidebar tab manager with groups and hibernation support",
-  "permissions": ["tabs", "storage", "sidePanel"],
+  "permissions": ["tabs", "storage", "sidePanel", "contextMenus"],
   "background": {
     "service_worker": "background.js"
   },
