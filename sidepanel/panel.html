@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tab Manager</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <span class="title">Tab Manager</span>
+      <button id="btn-new-group" title="新建分组">+</button>
+    </header>
+
+    <section id="active-section">
+      <div class="section-header">当前标签页</div>
+      <ul id="active-list"></ul>
+    </section>
+
+    <section id="groups-section">
+      <div class="section-header">标签组</div>
+      <div id="groups-list"></div>
+    </section>
+  </div>
+
+  <!-- 休眠到分组的弹出菜单 -->
+  <div id="group-picker" class="hidden">
+    <div id="group-picker-list"></div>
+    <button id="btn-picker-new">+ 新建分组</button>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
