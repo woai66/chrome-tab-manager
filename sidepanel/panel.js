@@ -62,6 +62,16 @@ function newTabId() { return 't_' + Date.now() + '_' + Math.random().toString(36
 
 const COLORS = ['#4A90D9', '#E67E22', '#27AE60', '#9B59B6', '#E74C3C', '#1ABC9C'];
 
+function hexToRgba(hex, alpha) {
+  const m = hex.replace('#', '').match(/.{2}/g);
+  if (!m) return hex;
+  const [r, g, b] = m.map(h => parseInt(h, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// 当前正在拖拽的分组索引（拖整个分组重排时）
+let draggingGroupIdx = null;
+
 // ---- Search ----
 function getKeyword() {
   return document.getElementById('search-input').value.trim().toLowerCase();
@@ -151,16 +161,17 @@ function renderGroups() {
   }
   const keyword = getKeyword();
 
-  state.groups.forEach(group => {
+  state.groups.forEach((group, groupIdx) => {
     const div = document.createElement('div');
     div.className = 'group-item';
     div.dataset.groupId = group.id;
+    div.dataset.groupIdx = groupIdx;
 
-    const tabsHtml = group.savedTabs.map(t => {
+    const tabsHtml = group.savedTabs.map((t, tabIdx) => {
       const isOpen = currentTabUrls.has(t.url);
       const hidden = keyword && !t.title.toLowerCase().includes(keyword) && !t.url.toLowerCase().includes(keyword);
       return `
-        <div class="saved-tab${isOpen ? ' tab-open' : ''}${hidden ? ' filtered' : ''}" data-tab-id="${t.id}" data-url="${escHtml(t.url)}">
+        <div class="saved-tab${isOpen ? ' tab-open' : ''}${hidden ? ' filtered' : ''}" draggable="true" data-tab-id="${t.id}" data-tab-idx="${tabIdx}" data-url="${escHtml(t.url)}">
           <img class="tab-favicon" src="${escHtml(t.favicon || getFaviconUrl(t.url))}">
           <span class="tab-title" title="${escHtml(t.url)}">${escHtml(t.title)}</span>
           ${isOpen ? '<span class="open-badge" title="当前已打开">●</span>' : ''}
@@ -169,7 +180,8 @@ function renderGroups() {
     }).join('');
 
     div.innerHTML = `
-      <div class="group-header" style="border-left: 3px solid ${group.color}">
+      <div class="group-header" draggable="true" style="--group-color: ${group.color}; --group-bg: ${hexToRgba(group.color, 0.14)};">
+        <span class="group-color-bar"></span>
         <span class="group-name">${escHtml(group.name)}</span>
         <span class="group-count">${group.savedTabs.length}</span>
         <span class="group-actions">
@@ -180,32 +192,95 @@ function renderGroups() {
         <span class="group-toggle">${group.collapsed ? '▶' : '▼'}</span>
       </div>
       <div class="group-tabs${group.collapsed ? ' collapsed' : ''}">
-        ${tabsHtml || '<div class="empty-hint">拖拽标签到此处，或用 🔖 保存</div>'}
+        ${tabsHtml || '<div class="empty-hint">拖拽标签到此处，或用「保存」按钮</div>'}
       </div>`;
 
-    // 拖拽放入
     const groupTabs = div.querySelector('.group-tabs');
     const groupHeader = div.querySelector('.group-header');
+
+    // === 接收来自活跃标签或其他分组的标签拖拽（外部 drop） ===
     [groupHeader, groupTabs].forEach(target => {
       target.addEventListener('dragover', (e) => {
+        // 如果当前正在拖分组本身，不允许 drop 到分组里（那是排序）
+        if (draggingGroupIdx !== null) return;
+        // 只接收两种 dataTransfer 类型
+        const types = e.dataTransfer.types;
+        const isTab = types.includes('application/tab');
+        const isSaved = types.includes('application/saved-tab');
+        if (!isTab && !isSaved) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
+        e.dataTransfer.dropEffect = isSaved ? 'move' : 'copy';
         div.classList.add('drag-over');
       });
       target.addEventListener('dragleave', (e) => {
         if (!div.contains(e.relatedTarget)) div.classList.remove('drag-over');
       });
       target.addEventListener('drop', (e) => {
+        if (draggingGroupIdx !== null) return;
+        const tabData = e.dataTransfer.getData('application/tab');
+        const savedData = e.dataTransfer.getData('application/saved-tab');
+        if (!tabData && !savedData) return;
         e.preventDefault();
         div.classList.remove('drag-over');
-        try {
-          const data = JSON.parse(e.dataTransfer.getData('application/tab'));
-          addTabToGroup(group.id, data.url, data.title, data.favicon);
-        } catch {}
+        if (savedData) {
+          try {
+            const data = JSON.parse(savedData);
+            // 同组放到 group-tabs 空白处不做事（避免自己拖到自己）
+            if (data.fromGroupId === group.id) return;
+            moveSavedTab(data.fromGroupId, data.tabId, group.id);
+          } catch {}
+        } else if (tabData) {
+          try {
+            const data = JSON.parse(tabData);
+            addTabToGroup(group.id, data.url, data.title, data.favicon);
+          } catch {}
+        }
       });
     });
 
-    div.querySelector('.group-header').addEventListener('click', (e) => {
+    // === 分组本身的拖拽（重排分组顺序） ===
+    groupHeader.addEventListener('dragstart', (e) => {
+      // 只有在 header 空白处拖才算重排，按钮/标签输入不算
+      if (e.target.closest('.group-actions, .group-name-input')) {
+        e.preventDefault();
+        return;
+      }
+      draggingGroupIdx = groupIdx;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('application/group-idx', String(groupIdx));
+      div.classList.add('group-dragging');
+    });
+    groupHeader.addEventListener('dragend', () => {
+      draggingGroupIdx = null;
+      div.classList.remove('group-dragging');
+      document.querySelectorAll('.group-item').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+    });
+
+    div.addEventListener('dragover', (e) => {
+      if (draggingGroupIdx === null || draggingGroupIdx === groupIdx) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = div.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      div.classList.toggle('drop-before', before);
+      div.classList.toggle('drop-after', !before);
+    });
+    div.addEventListener('dragleave', (e) => {
+      if (!div.contains(e.relatedTarget)) {
+        div.classList.remove('drop-before', 'drop-after');
+      }
+    });
+    div.addEventListener('drop', (e) => {
+      if (draggingGroupIdx === null || draggingGroupIdx === groupIdx) return;
+      e.preventDefault();
+      const rect = div.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      reorderGroup(draggingGroupIdx, groupIdx, before);
+      div.classList.remove('drop-before', 'drop-after');
+    });
+
+    // === header 点击折叠 ===
+    groupHeader.addEventListener('click', (e) => {
       if (e.target.closest('.group-actions')) return;
       group.collapsed = !group.collapsed;
       saveData();
@@ -215,11 +290,61 @@ function renderGroups() {
     div.querySelector('.btn-rename').addEventListener('click', (e) => { e.stopPropagation(); startRename(div, group); });
     div.querySelector('.btn-delete-group').addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(group.id); });
 
+    // === 分组内 saved-tab 事件 ===
     div.querySelectorAll('.saved-tab').forEach(el => {
       const img = el.querySelector('.tab-favicon');
       if (img) img.addEventListener('error', () => { img.src = FALLBACK_FAVICON; }, { once: true });
       el.querySelector('.tab-title').addEventListener('click', () => smartOpen(el.dataset.url));
       el.querySelector('.remove-btn').addEventListener('click', (e) => { e.stopPropagation(); removeSavedTab(group.id, el.dataset.tabId); });
+
+      // saved-tab 拖拽起手（用于跨分组移动 + 同分组排序）
+      el.addEventListener('dragstart', (e) => {
+        e.stopPropagation();
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('application/saved-tab', JSON.stringify({
+          fromGroupId: group.id,
+          tabId: el.dataset.tabId
+        }));
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => {
+        el.classList.remove('dragging');
+        div.querySelectorAll('.saved-tab').forEach(s => s.classList.remove('drop-before', 'drop-after'));
+      });
+
+      // saved-tab 内部排序（同分组内）
+      el.addEventListener('dragover', (e) => {
+        const savedData = e.dataTransfer.types.includes('application/saved-tab');
+        if (!savedData) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = el.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        el.classList.toggle('drop-before', before);
+        el.classList.toggle('drop-after', !before);
+      });
+      el.addEventListener('dragleave', () => {
+        el.classList.remove('drop-before', 'drop-after');
+      });
+      el.addEventListener('drop', (e) => {
+        const savedData = e.dataTransfer.getData('application/saved-tab');
+        if (!savedData) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const data = JSON.parse(savedData);
+          const rect = el.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          if (data.fromGroupId === group.id) {
+            // 同组内排序
+            reorderSavedTab(group.id, data.tabId, el.dataset.tabId, before);
+          } else {
+            // 跨组移动到指定位置
+            moveSavedTab(data.fromGroupId, data.tabId, group.id, el.dataset.tabId, before);
+          }
+        } catch {}
+        el.classList.remove('drop-before', 'drop-after');
+      });
     });
 
     container.appendChild(div);
@@ -241,6 +366,58 @@ async function smartOpen(url) {
   } else {
     chrome.tabs.create({ url });
   }
+}
+
+// ---- Drag & Drop reorder ----
+function reorderGroup(fromIdx, toIdx, before) {
+  if (fromIdx === toIdx) return;
+  const [moved] = state.groups.splice(fromIdx, 1);
+  // 删除后 toIdx 可能需要调整
+  let target = toIdx;
+  if (fromIdx < toIdx) target -= 1;
+  if (!before) target += 1;
+  target = Math.max(0, Math.min(state.groups.length, target));
+  state.groups.splice(target, 0, moved);
+  saveData();
+  renderGroups();
+}
+
+function reorderSavedTab(groupId, fromTabId, toTabId, before) {
+  if (fromTabId === toTabId) return;
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group) return;
+  const fromIdx = group.savedTabs.findIndex(t => t.id === fromTabId);
+  const toIdx = group.savedTabs.findIndex(t => t.id === toTabId);
+  if (fromIdx < 0 || toIdx < 0) return;
+  const [moved] = group.savedTabs.splice(fromIdx, 1);
+  let target = toIdx;
+  if (fromIdx < toIdx) target -= 1;
+  if (!before) target += 1;
+  target = Math.max(0, Math.min(group.savedTabs.length, target));
+  group.savedTabs.splice(target, 0, moved);
+  saveData();
+  renderGroups();
+}
+
+function moveSavedTab(fromGroupId, tabId, toGroupId, beforeTabId = null, before = true) {
+  if (fromGroupId === toGroupId && !beforeTabId) return;
+  const fromGroup = state.groups.find(g => g.id === fromGroupId);
+  const toGroup = state.groups.find(g => g.id === toGroupId);
+  if (!fromGroup || !toGroup) return;
+  const fromIdx = fromGroup.savedTabs.findIndex(t => t.id === tabId);
+  if (fromIdx < 0) return;
+  const [moved] = fromGroup.savedTabs.splice(fromIdx, 1);
+  // URL 去重：目标分组里若已有相同 URL，先移除（避免重复）
+  toGroup.savedTabs = toGroup.savedTabs.filter(t => t.url !== moved.url);
+  if (beforeTabId) {
+    const insertAt = toGroup.savedTabs.findIndex(t => t.id === beforeTabId);
+    if (insertAt < 0) toGroup.savedTabs.push(moved);
+    else toGroup.savedTabs.splice(before ? insertAt : insertAt + 1, 0, moved);
+  } else {
+    toGroup.savedTabs.push(moved);
+  }
+  saveData();
+  renderGroups();
 }
 
 // ---- Group Operations ----
