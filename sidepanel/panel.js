@@ -37,18 +37,22 @@ function escHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function cleanTitle(title) {
-  if (!title) return '';
-  // Chrome discarded/unloaded tabs prepend junk: control chars, smart quotes, >
-  let s = title;
-  let prev;
-  do {
-    prev = s;
-    s = s.replace(/^[\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\ufeff]+/, '');
-    s = s.replace(/^[\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f\u2032\u2033\u0027\u0022]+/, '');
-    s = s.replace(/^[>\s]+/, '');
-  } while (s !== prev);
-  return s;
+function cleanTitle(t) {
+  if (!t) return '';
+  // 调试日志：发现非字母/数字开头时打印码点（F12 查看、修完后删）
+  if (/^[^\p{L}\p{N}]/u.test(t)) {
+    console.log('[cleanTitle] junk prefix codepoints:',
+      [...t].slice(0, 8).map(c => 'U+' + c.charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()),
+      'raw:', JSON.stringify(t.slice(0, 12))
+    );
+  }
+  // 自适应：剩离开头所有「非有意义字符」直到遇到首个语义字符
+  // 有意义 = 字母 / 数字 / 中文 / 常见合法首字符 +@#*&%([{$!?.
+  const meaningful = /[\p{L}\p{N}+@#*&%(\[{$!?.]/u;
+  const arr = [...t];
+  let i = 0;
+  while (i < arr.length && !meaningful.test(arr[i])) i++;
+  return arr.slice(i).join('').trim();
 }
 
 const FALLBACK_FAVICON = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="2" fill="%23ddd"/></svg>';

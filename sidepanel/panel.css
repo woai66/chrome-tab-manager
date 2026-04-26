@@ -181,7 +181,6 @@ body {
 .tab-item {
   display: flex;
   align-items: center;
-  flex-wrap: nowrap;
   gap: 8px;
   padding: 6px 12px;
   cursor: pointer;
@@ -210,11 +209,20 @@ body {
 
 .tab-actions {
   display: none;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   gap: 4px;
-  flex-shrink: 0;
   align-items: center;
+  padding-left: 24px;
+  /* 渐变蒙版：让按钮覆盖在标题尾部时视觉过渡更自然 */
+  background: linear-gradient(to right, transparent, var(--bg-hover) 30%);
 }
 .tab-item:hover .tab-actions { display: flex; }
+.tab-item.active-tab:hover .tab-actions {
+  background: linear-gradient(to right, transparent, var(--bg-active) 30%);
+}
 
 .tab-actions button {
   border: none;
