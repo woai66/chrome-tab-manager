@@ -10,21 +10,43 @@
   <div id="app">
     <header id="toolbar">
       <span class="title">Tab Manager</span>
-      <button id="btn-new-group" title="新建分组">+</button>
+      <div class="toolbar-actions">
+        <button id="btn-search-toggle" title="搜索标签">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="10" y1="10" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="btn-new-group" title="新建分组">+</button>
+      </div>
     </header>
 
+    <div id="search-bar" class="hidden">
+      <input id="search-input" type="text" placeholder="搜索标签标题或网址…" autocomplete="off">
+    </div>
+
+    <div id="new-group-form" class="hidden">
+      <input id="new-group-input" type="text" placeholder="分组名称" maxlength="20" autocomplete="off">
+      <button id="btn-group-confirm" title="确认">✓</button>
+      <button id="btn-group-cancel" title="取消">✕</button>
+    </div>
+
     <section id="active-section">
-      <div class="section-header">当前标签页</div>
+      <div class="section-header">
+        <span>当前标签页</span>
+        <button id="btn-hibernate-all" title="将所有标签休眠到分组">全部休眠</button>
+      </div>
       <ul id="active-list"></ul>
     </section>
 
     <section id="groups-section">
-      <div class="section-header">标签组</div>
+      <div class="section-header">
+        <span>标签组</span>
+      </div>
       <div id="groups-list"></div>
     </section>
   </div>
 
-  <!-- 休眠到分组的弹出菜单 -->
   <div id="group-picker" class="hidden">
     <div id="group-picker-list"></div>
     <button id="btn-picker-new">+ 新建分组</button>
