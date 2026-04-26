@@ -126,6 +126,19 @@ body {
   cursor: pointer;
 }
 .settings-actions button:hover { background: var(--btn-bg-hover); }
+.settings-actions-sync button:last-child {
+  background: var(--accent);
+  color: #fff;
+}
+.settings-actions-sync button:last-child:hover {
+  filter: brightness(1.05);
+}
+#sync-status {
+  min-height: 32px;
+}
+.hidden {
+  display: none !important;
+}
 
 /* ---- Search Bar ---- */
 #search-bar {

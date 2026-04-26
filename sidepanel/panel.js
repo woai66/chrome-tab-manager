@@ -1,5 +1,5 @@
 // ---- Storage ----
-let state = { groups: [], syncEnabled: false };
+let state = { groups: [], syncEnabled: false, syncPushEnabled: false };
 
 function normalizeGroups(groups) {
   groups.forEach(g => {
@@ -15,11 +15,15 @@ function normalizeGroups(groups) {
 }
 
 async function loadData() {
-  const result = await chrome.storage.local.get(['groups', 'syncEnabled']);
+  const result = await chrome.storage.local.get(['groups', 'syncEnabled', 'syncPushEnabled']);
   state.groups = normalizeGroups(result.groups || []);
   state.syncEnabled = !!result.syncEnabled;
+  state.syncPushEnabled = !!result.syncPushEnabled;
   if (state.syncEnabled) {
-    await syncPull();
+    const cloudExists = await hasCloudData();
+    if (cloudExists) {
+      await syncPull();
+    }
   }
 }
 
@@ -86,6 +90,16 @@ let draggingGroupIdx = null;
 let syncPushTimer = null;
 let lastSyncPushAt = 0;
 
+function setSyncStatus(text) {
+  const el = document.getElementById('sync-status');
+  if (el) el.textContent = text;
+}
+
+async function hasCloudData() {
+  const { sync_meta } = await chrome.storage.sync.get('sync_meta');
+  return !!sync_meta;
+}
+
 function getCloudFavicon(url) {
   try {
     return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16`;
@@ -97,7 +111,7 @@ function markGroupUpdated(group) {
 }
 
 async function syncPush() {
-  if (!state.syncEnabled) return;
+  if (!state.syncEnabled) return false;
   const now = Date.now();
   const items = {
     sync_meta: {
@@ -135,12 +149,18 @@ async function syncPush() {
   if (stale.length) await chrome.storage.sync.remove(stale);
   await chrome.storage.sync.set(items);
   lastSyncPushAt = Date.now();
-  updateQuotaDisplay();
+  setSyncStatus(`已上传 ${state.groups.length} 个分组到云端`);
+  await updateQuotaDisplay();
+  return true;
 }
 
 async function syncPull() {
   const all = await chrome.storage.sync.get(null);
-  if (!all.sync_meta) return;
+  if (!all.sync_meta) {
+    setSyncStatus('云端暂无数据，可在本机整理后手动上传');
+    await updateQuotaDisplay();
+    return false;
+  }
   const localById = new Map(state.groups.map(g => [g.id, g]));
   const merged = [];
 
@@ -190,11 +210,67 @@ async function syncPull() {
   state.groups = normalizeGroups(merged);
   await chrome.storage.local.set({ groups: state.groups });
   renderGroups();
-  updateQuotaDisplay();
+  setSyncStatus(`已从云端同步 ${state.groups.length} 个分组`);
+  await updateQuotaDisplay();
+  return true;
+}
+
+async function enableSync() {
+  state.syncEnabled = true;
+  state.syncPushEnabled = false;
+  await chrome.storage.local.set({ syncEnabled: true, syncPushEnabled: false });
+  const cloudExists = await hasCloudData();
+  if (cloudExists) {
+    await syncPull();
+    setSyncStatus('已开启同步；当前为只拉取模式，不会自动上传本机改动');
+  } else {
+    setSyncStatus('云端暂无数据；已开启同步监听，点击“上传到云端”后才会推送本机数据');
+    await updateQuotaDisplay();
+  }
+}
+
+async function disableSync() {
+  state.syncEnabled = false;
+  state.syncPushEnabled = false;
+  clearTimeout(syncPushTimer);
+  await chrome.storage.local.set({ syncEnabled: false, syncPushEnabled: false });
+  setSyncStatus('已关闭本机同步；云端数据会保留');
+  await updateQuotaDisplay();
+}
+
+async function manualSyncPush() {
+  if (!state.syncEnabled) {
+    setSyncStatus('请先开启跨设备同步');
+    return;
+  }
+  try {
+    state.syncPushEnabled = true;
+    await chrome.storage.local.set({ syncPushEnabled: true });
+    await syncPush();
+  } catch (err) {
+    console.warn('[sync] manual push failed:', err);
+    setSyncStatus('上传失败，请稍后重试');
+  }
+}
+
+async function manualSyncPull() {
+  if (!state.syncEnabled) {
+    setSyncStatus('请先开启跨设备同步');
+    return;
+  }
+  try {
+    const pulled = await syncPull();
+    if (!pulled) {
+      setSyncStatus('云端暂无数据');
+    }
+  } catch (err) {
+    console.warn('[sync] manual pull failed:', err);
+    setSyncStatus('拉取失败，请稍后重试');
+  }
 }
 
 function scheduleSyncPush() {
-  if (!state.syncEnabled) return;
+  if (!state.syncEnabled || !state.syncPushEnabled) return;
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(() => syncPush().catch(err => console.warn('[sync] push failed:', err)), 5000);
 }
@@ -877,17 +953,15 @@ document.getElementById('btn-settings').addEventListener('click', (e) => {
 });
 
 document.getElementById('toggle-sync').addEventListener('change', async (e) => {
-  state.syncEnabled = e.target.checked;
-  await chrome.storage.local.set({ syncEnabled: state.syncEnabled });
-  if (state.syncEnabled) {
-    await syncPush();
-    await syncPull();
-    await updateQuotaDisplay();
+  if (e.target.checked) {
+    await enableSync();
   } else {
-    await chrome.storage.sync.clear();
-    await updateQuotaDisplay();
+    await disableSync();
   }
 });
+
+document.getElementById('btn-sync-pull').addEventListener('click', manualSyncPull);
+document.getElementById('btn-sync-push').addEventListener('click', manualSyncPush);
 
 document.getElementById('btn-export-data').addEventListener('click', exportData);
 document.getElementById('btn-import-data').addEventListener('click', () => {
@@ -936,7 +1010,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 loadData().then(async () => {
   document.getElementById('toggle-sync').checked = state.syncEnabled;
-  updateQuotaDisplay();
+  if (!state.syncEnabled) {
+    setSyncStatus('同步未开启');
+  } else if (state.syncPushEnabled) {
+    setSyncStatus('同步已开启；本机改动会自动上传到云端');
+  } else {
+    setSyncStatus('同步已开启；当前为只拉取模式，不会自动上传本机改动');
+  }
+  await updateQuotaDisplay();
   await renderAll();
   consumePendingContextSave();
 });

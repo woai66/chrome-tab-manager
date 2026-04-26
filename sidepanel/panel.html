@@ -28,7 +28,12 @@
         <span>跨设备同步</span>
       </label>
       <div id="sync-quota" class="settings-hint">已用 -- / 100 KB</div>
+      <div id="sync-status" class="settings-hint">开启后会优先从云端拉取，不会立即上传本机数据</div>
       <div class="settings-hint">仅同步分组和标签 URL，不同步图标</div>
+      <div class="settings-actions settings-actions-sync">
+        <button id="btn-sync-pull">从云端拉取</button>
+        <button id="btn-sync-push">上传到云端</button>
+      </div>
       <div class="settings-actions">
         <button id="btn-export-data">导出数据</button>
         <button id="btn-import-data">导入数据</button>
