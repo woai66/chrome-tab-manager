@@ -110,6 +110,22 @@ body {
   color: var(--text-muted);
   line-height: 1.35;
 }
+.settings-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.settings-actions button {
+  flex: 1;
+  border: none;
+  border-radius: 4px;
+  background: var(--btn-bg);
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-actions button:hover { background: var(--btn-bg-hover); }
 
 /* ---- Search Bar ---- */
 #search-bar {

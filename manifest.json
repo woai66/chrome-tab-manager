@@ -3,6 +3,7 @@
   "name": "Tab Manager",
   "version": "1.0.0",
   "description": "Sidebar tab manager with groups and hibernation support",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArmwOK2aLkx3k8aVmJj/67Vufvw8MQV0pGBVQYKhdxzDtuJVjO3lfwawHRivYUjup3TFux6Z+1flTd0U9dumvWk2qG6QQU3spfj4fMHV/s7XameLmET8dwGWqclU0DBsH+/zzPyG1FHXs5hj3kcNrMKVmyokcu2SvDlYsFW9O3pLDlT+Jryy9XD2a45XCLM3z0nXwF5em12H/K/DYjJI/kp7rrIexFgYEobs4kscn8puMf8LJNSTZQLNlkjtdU2HPW+YHy6crIYPTzCgs2nm4dEwGC1NQwL0dp4vHkRlkqHVmPUUJZpQILB6viRwuHcGpkbPCgyiP54dm8+Mkp5SBXQIDAQAB",
   "permissions": ["tabs", "storage", "sidePanel", "contextMenus"],
   "background": {
     "service_worker": "background.js"

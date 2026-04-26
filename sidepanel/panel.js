@@ -836,6 +836,32 @@ document.getElementById('btn-picker-new').addEventListener('click', () => {
   });
 });
 
+function exportData() {
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    groups: state.groups
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'tab-manager-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importData(file) {
+  const text = await file.text();
+  const payload = JSON.parse(text);
+  const groups = Array.isArray(payload) ? payload : payload.groups;
+  if (!Array.isArray(groups)) throw new Error('无效的备份文件');
+  state.groups = normalizeGroups(groups);
+  await chrome.storage.local.set({ groups: state.groups });
+  if (state.syncEnabled) await syncPush();
+  await renderAll();
+}
+
 async function consumePendingContextSave() {
   const { pendingContextSave } = await chrome.storage.local.get('pendingContextSave');
   if (!pendingContextSave) return;
@@ -860,6 +886,23 @@ document.getElementById('toggle-sync').addEventListener('change', async (e) => {
   } else {
     await chrome.storage.sync.clear();
     await updateQuotaDisplay();
+  }
+});
+
+document.getElementById('btn-export-data').addEventListener('click', exportData);
+document.getElementById('btn-import-data').addEventListener('click', () => {
+  document.getElementById('import-data-input').click();
+});
+document.getElementById('import-data-input').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    await importData(file);
+    alert('导入成功');
+  } catch (err) {
+    alert('导入失败：' + err.message);
+  } finally {
+    e.target.value = '';
   }
 });
 
