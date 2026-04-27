@@ -204,6 +204,10 @@ body {
 #active-section { max-height: 50vh; border-bottom: 1px solid var(--border); }
 #groups-section { flex: 1; overflow-y: auto; }
 
+#active-section.collapsed { max-height: none; overflow: hidden; }
+#active-section.collapsed #active-list { display: none; }
+#active-section.collapsed .collapse-arrow { transform: rotate(-90deg); }
+
 .section-header {
   display: flex;
   align-items: center;
@@ -217,6 +221,25 @@ body {
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+}
+#active-header { cursor: pointer; user-select: none; }
+#active-header:hover { background: var(--btn-bg); }
+
+.header-label { display: inline-flex; align-items: center; gap: 6px; }
+.collapse-arrow {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+  color: var(--text-muted);
+}
+.header-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
 }
 
 #btn-hibernate-all {

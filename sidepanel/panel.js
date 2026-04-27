@@ -1,5 +1,5 @@
 // ---- Storage ----
-let state = { groups: [], syncEnabled: false, syncPushEnabled: false };
+let state = { groups: [], syncEnabled: false, syncPushEnabled: false, activeCollapsed: false };
 
 function normalizeGroups(groups) {
   groups.forEach(g => {
@@ -15,10 +15,12 @@ function normalizeGroups(groups) {
 }
 
 async function loadData() {
-  const result = await chrome.storage.local.get(['groups', 'syncEnabled', 'syncPushEnabled']);
+  const result = await chrome.storage.local.get(['groups', 'syncEnabled', 'syncPushEnabled', 'activeCollapsed']);
   state.groups = normalizeGroups(result.groups || []);
   state.syncEnabled = !!result.syncEnabled;
   state.syncPushEnabled = !!result.syncPushEnabled;
+  state.activeCollapsed = !!result.activeCollapsed;
+  applyActiveCollapsed();
   if (state.syncEnabled) {
     const cloudExists = await hasCloudData();
     if (cloudExists) {
@@ -310,6 +312,9 @@ let currentTabUrls = new Set(); // 当前已打开的 tab URL 集合
 function renderActiveTabs(tabs) {
   // 更新当前已打开的 URL 集合（用于分组高亮）
   currentTabUrls = new Set(tabs.map(t => t.url));
+
+  const countEl = document.getElementById('active-count');
+  if (countEl) countEl.textContent = tabs.length ? `(${tabs.length})` : '';
 
   const list = document.getElementById('active-list');
   list.innerHTML = '';
@@ -866,7 +871,24 @@ function confirmNewGroup() {
   if (cb) cb(group.id);
 }
 
+// ---- Active Section Collapse ----
+function applyActiveCollapsed() {
+  document.getElementById('active-section')?.classList.toggle('collapsed', state.activeCollapsed);
+}
+
+async function toggleActiveCollapsed() {
+  state.activeCollapsed = !state.activeCollapsed;
+  applyActiveCollapsed();
+  await chrome.storage.local.set({ activeCollapsed: state.activeCollapsed });
+}
+
 // ---- Event Listeners ----
+document.getElementById('active-header').addEventListener('click', (e) => {
+  // 点到「全部保存」按钮时不触发折叠
+  if (e.target.closest('#btn-hibernate-all')) return;
+  toggleActiveCollapsed();
+});
+
 document.getElementById('btn-new-group').addEventListener('click', () => showNewGroupForm());
 document.getElementById('btn-group-confirm').addEventListener('click', confirmNewGroup);
 document.getElementById('btn-group-cancel').addEventListener('click', hideNewGroupForm);
