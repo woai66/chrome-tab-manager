@@ -1,5 +1,14 @@
 // ---- Storage ----
-let state = { groups: [], syncEnabled: false, syncPushEnabled: false, activeCollapsed: false };
+const DEFAULT_ACTIVE_SECTION_RATIO = 0.42;
+const MIN_GROUPS_CONTENT_HEIGHT = 96;
+
+let state = {
+  groups: [],
+  syncEnabled: false,
+  syncPushEnabled: false,
+  activeCollapsed: false,
+  activeSectionRatio: DEFAULT_ACTIVE_SECTION_RATIO
+};
 
 function normalizeGroups(groups) {
   groups.forEach(g => {
@@ -15,11 +24,20 @@ function normalizeGroups(groups) {
 }
 
 async function loadData() {
-  const result = await chrome.storage.local.get(['groups', 'syncEnabled', 'syncPushEnabled', 'activeCollapsed']);
+  const result = await chrome.storage.local.get([
+    'groups',
+    'syncEnabled',
+    'syncPushEnabled',
+    'activeCollapsed',
+    'activeSectionRatio'
+  ]);
   state.groups = normalizeGroups(result.groups || []);
   state.syncEnabled = !!result.syncEnabled;
   state.syncPushEnabled = !!result.syncPushEnabled;
   state.activeCollapsed = !!result.activeCollapsed;
+  if (Number.isFinite(result.activeSectionRatio) && result.activeSectionRatio > 0 && result.activeSectionRatio < 1) {
+    state.activeSectionRatio = result.activeSectionRatio;
+  }
   applyActiveCollapsed();
   if (state.syncEnabled) {
     const cloudExists = await hasCloudData();
@@ -852,13 +870,17 @@ function showNewGroupForm(onCreated = null) {
   pendingHibernate = onCreated;
   const form = document.getElementById('new-group-form');
   form.classList.remove('hidden');
+  scheduleActiveSectionResize();
   const input = document.getElementById('new-group-input');
   input.value = '';
   input.focus();
 }
 
 function hideNewGroupForm() {
-  document.getElementById('new-group-form').classList.add('hidden');
+  const form = document.getElementById('new-group-form');
+  const wasVisible = !form.classList.contains('hidden');
+  form.classList.add('hidden');
+  if (wasVisible) scheduleActiveSectionResize();
   pendingHibernate = null;
 }
 
@@ -872,8 +894,81 @@ function confirmNewGroup() {
 }
 
 // ---- Active Section Collapse ----
+let activeResizePointerId = null;
+let activeResizeFrame = null;
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getActiveResizeMetrics() {
+  const app = document.getElementById('app');
+  const activeSection = document.getElementById('active-section');
+  const activeHeader = document.getElementById('active-header');
+  const groupsHeader = document.querySelector('#groups-section > .section-header');
+  const resizer = document.getElementById('section-resizer');
+  const appRect = app.getBoundingClientRect();
+  const activeRect = activeSection.getBoundingClientRect();
+  const availableHeight = Math.max(1, appRect.bottom - activeRect.top - resizer.offsetHeight);
+  const minHeight = activeHeader.offsetHeight + 32;
+  const reservedGroupsHeight = groupsHeader.offsetHeight + MIN_GROUPS_CONTENT_HEIGHT;
+  const maxHeight = Math.max(minHeight, availableHeight - reservedGroupsHeight);
+
+  return { activeTop: activeRect.top, availableHeight, minHeight, maxHeight };
+}
+
+function setActiveSectionHeight(height, updateRatio = true) {
+  const activeSection = document.getElementById('active-section');
+  const resizer = document.getElementById('section-resizer');
+  const metrics = getActiveResizeMetrics();
+  const nextHeight = clamp(height, metrics.minHeight, metrics.maxHeight);
+
+  if (updateRatio) {
+    state.activeSectionRatio = nextHeight / metrics.availableHeight;
+  }
+  activeSection.style.setProperty('--active-section-max-height', `${Math.round(nextHeight)}px`);
+  resizer.setAttribute('aria-valuemin', String(Math.round(metrics.minHeight)));
+  resizer.setAttribute('aria-valuemax', String(Math.round(metrics.maxHeight)));
+  resizer.setAttribute('aria-valuenow', String(Math.round(nextHeight)));
+}
+
+function applyActiveSectionRatio() {
+  if (state.activeCollapsed) return;
+  const metrics = getActiveResizeMetrics();
+  const ratio = clamp(state.activeSectionRatio, 0, 1);
+  setActiveSectionHeight(metrics.availableHeight * ratio, false);
+}
+
+function scheduleActiveSectionResize() {
+  cancelAnimationFrame(activeResizeFrame);
+  activeResizeFrame = requestAnimationFrame(() => {
+    activeResizeFrame = null;
+    applyActiveSectionRatio();
+  });
+}
+
+function saveActiveSectionRatio() {
+  chrome.storage.local.set({ activeSectionRatio: state.activeSectionRatio });
+}
+
+function resizeActiveSectionAt(clientY) {
+  const metrics = getActiveResizeMetrics();
+  setActiveSectionHeight(clientY - metrics.activeTop);
+}
+
+function stopActiveSectionResize(e) {
+  if (activeResizePointerId !== e.pointerId) return;
+  activeResizePointerId = null;
+  document.body.classList.remove('resizing');
+  saveActiveSectionRatio();
+}
+
 function applyActiveCollapsed() {
-  document.getElementById('active-section')?.classList.toggle('collapsed', state.activeCollapsed);
+  const activeSection = document.getElementById('active-section');
+  const resizer = document.getElementById('section-resizer');
+  activeSection?.classList.toggle('collapsed', state.activeCollapsed);
+  resizer?.setAttribute('aria-hidden', String(state.activeCollapsed));
+  if (!state.activeCollapsed) scheduleActiveSectionResize();
 }
 
 async function toggleActiveCollapsed() {
@@ -888,6 +983,47 @@ document.getElementById('active-header').addEventListener('click', (e) => {
   if (e.target.closest('#btn-hibernate-all')) return;
   toggleActiveCollapsed();
 });
+
+const sectionResizer = document.getElementById('section-resizer');
+sectionResizer.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || state.activeCollapsed) return;
+  e.preventDefault();
+  activeResizePointerId = e.pointerId;
+  sectionResizer.setPointerCapture(e.pointerId);
+  document.body.classList.add('resizing');
+  resizeActiveSectionAt(e.clientY);
+});
+sectionResizer.addEventListener('pointermove', (e) => {
+  if (activeResizePointerId !== e.pointerId) return;
+  resizeActiveSectionAt(e.clientY);
+});
+sectionResizer.addEventListener('pointerup', stopActiveSectionResize);
+sectionResizer.addEventListener('pointercancel', stopActiveSectionResize);
+sectionResizer.addEventListener('dblclick', () => {
+  state.activeSectionRatio = DEFAULT_ACTIVE_SECTION_RATIO;
+  applyActiveSectionRatio();
+  saveActiveSectionRatio();
+});
+sectionResizer.addEventListener('keydown', (e) => {
+  const direction = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+  const metrics = getActiveResizeMetrics();
+  let nextHeight = metrics.availableHeight * state.activeSectionRatio;
+
+  if (direction) {
+    nextHeight += direction * (e.shiftKey ? 8 : 24);
+  } else if (e.key === 'Home') {
+    nextHeight = metrics.minHeight;
+  } else if (e.key === 'End') {
+    nextHeight = metrics.maxHeight;
+  } else {
+    return;
+  }
+
+  e.preventDefault();
+  setActiveSectionHeight(nextHeight);
+  saveActiveSectionRatio();
+});
+window.addEventListener('resize', scheduleActiveSectionResize);
 
 document.getElementById('btn-new-group').addEventListener('click', () => showNewGroupForm());
 document.getElementById('btn-group-confirm').addEventListener('click', confirmNewGroup);
@@ -906,6 +1042,7 @@ document.getElementById('btn-search-toggle').addEventListener('click', () => {
     document.getElementById('search-input').value = '';
     filterTabs();
   }
+  scheduleActiveSectionResize();
 });
 document.getElementById('search-input').addEventListener('input', filterTabs);
 

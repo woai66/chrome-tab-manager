@@ -198,15 +198,66 @@ body {
 
 /* ---- Sections ---- */
 #active-section, #groups-section {
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   flex-shrink: 0;
 }
-#active-section { max-height: 50vh; border-bottom: 1px solid var(--border); }
-#groups-section { flex: 1; overflow-y: auto; }
+#active-section {
+  max-height: var(--active-section-max-height, 42vh);
+  overflow: hidden;
+}
+#active-list, #groups-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+#groups-section { flex: 1; overflow: hidden; }
 
 #active-section.collapsed { max-height: none; overflow: hidden; }
 #active-section.collapsed #active-list { display: none; }
 #active-section.collapsed .collapse-arrow { transform: rotate(-90deg); }
+#active-section.collapsed + #section-resizer { display: none; }
+
+#section-resizer {
+  position: relative;
+  height: 7px;
+  flex: 0 0 7px;
+  cursor: row-resize;
+  touch-action: none;
+  outline: none;
+}
+#section-resizer::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--border);
+}
+.resizer-grip {
+  position: absolute;
+  z-index: 1;
+  top: 2px;
+  left: 50%;
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-dim);
+  opacity: 0.4;
+  transform: translateX(-50%);
+  transition: opacity 0.15s, background 0.15s;
+}
+#section-resizer:hover .resizer-grip,
+#section-resizer:focus-visible .resizer-grip,
+body.resizing #section-resizer .resizer-grip {
+  background: var(--accent);
+  opacity: 1;
+}
+body.resizing {
+  cursor: row-resize;
+  user-select: none;
+}
 
 .section-header {
   display: flex;
